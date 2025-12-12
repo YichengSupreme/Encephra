@@ -47,7 +47,10 @@ const hydrateNode = (n: any): NodeData => ({
         Number.isFinite(n.position?.z) ? n.position.z : (Math.random()-0.5)*10
     ),
     tags: Array.isArray(n.tags) ? n.tags : [], // Safeguard against undefined tags
-    connections: Array.isArray(n.connections) ? n.connections : []
+    connections: Array.isArray(n.connections) ? n.connections : [],
+    isGhost: n.isGhost || false,
+    category: n.category || 'concept', // EXPLICIT FALLBACK: Ensures shapes persist after import
+    citation: n.citation || undefined
 });
 
 export const useGraphData = () => {
@@ -119,7 +122,7 @@ export const useGraphData = () => {
         setIsLoaded(true);
     }, [loadDemo]);
 
-    // 2. Auto-Save
+    // 2. Auto-Save (SAFE MODE)
     useEffect(() => {
         if (!isLoaded || nodes.length === 0 || isResetting || injectionRef.current) return;
 
@@ -131,9 +134,10 @@ export const useGraphData = () => {
                 config: { nodeCount, complexity, clusterStrength }
             };
             try {
+                // Safety wrapper: If storage is full, we log warning but DO NOT crash the app.
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
             } catch (e) {
-                console.warn("Storage quota exceeded!", e);
+                console.warn("Local Storage Full - Autosave skipped (App remains functional)", e);
             }
         }, 1000);
 
@@ -244,7 +248,7 @@ export const useGraphData = () => {
                 clearInterval(interval);
             }
 
-        }, 100); // 100ms per batch
+        }, 150); // 150ms per batch (slower animation)
 
         return () => clearInterval(interval);
 
@@ -318,25 +322,294 @@ export const useGraphData = () => {
         setNodeCount(prev => prev - 1);
     }, []);
 
-    const addLink = useCallback((sourceId: number, targetId: number) => {
-        const exists = links.some(l => 
+    const toggleConnection = useCallback((sourceId: number, targetId: number) => {
+        if (sourceId === targetId) return;
+
+        const existingLink = links.find(l => 
             (l.source === sourceId && l.target === targetId) || 
             (l.source === targetId && l.target === sourceId)
         );
-        if (exists || sourceId === targetId) return;
 
+        if (existingLink) {
+            // REMOVE
+            setLinks(prev => prev.filter(l => l.id !== existingLink.id));
+            setNodes(prev => prev.map(n => {
+                if (n.id === sourceId) return { ...n, connections: n.connections.filter(id => id !== targetId) };
+                if (n.id === targetId) return { ...n, connections: n.connections.filter(id => id !== sourceId) };
+                return n;
+            }));
+        } else {
+            // ADD
+            const sourceNode = nodes.find(n => n.id === sourceId);
+            const targetNode = nodes.find(n => n.id === targetId);
+            if (!sourceNode || !targetNode) return;
+
+            const dist = sourceNode.position.distanceTo(targetNode.position);
+            setLinks(prev => [...prev, { id: `${sourceId}-${targetId}`, source: sourceId, target: targetId, length: dist }]);
+            setNodes(prev => prev.map(n => {
+                if (n.id === sourceId) return { ...n, connections: [...n.connections, targetId] };
+                if (n.id === targetId) return { ...n, connections: [...n.connections, sourceId] };
+                return n;
+            }));
+        }
+    }, [links, nodes]);
+
+    // --- SYNAPTIC SYNTHESIS LOGIC ---
+    
+    // 1. Create Placeholder Node at Midpoint
+    const spawnBridgeNode = useCallback((sourceId: number, targetId: number) => {
         const sourceNode = nodes.find(n => n.id === sourceId);
         const targetNode = nodes.find(n => n.id === targetId);
-        if (!sourceNode || !targetNode) return;
+        if (!sourceNode || !targetNode) return null;
 
-        const dist = sourceNode.position.distanceTo(targetNode.position);
-        setLinks(prev => [...prev, { id: `${sourceId}-${targetId}`, source: sourceId, target: targetId, length: dist }]);
+        const newId = nodes.length > 0 ? Math.max(...nodes.map(n => n.id)) + 1 : 0;
+        
+        // Midpoint calculation
+        const midPos = sourceNode.position.clone().add(targetNode.position).multiplyScalar(0.5);
+
+        const bridgeNode: NodeData = {
+            id: newId,
+            position: midPos,
+            connections: [sourceId, targetId],
+            activity: 0,
+            title: "Synthesizing...",
+            content: "Consulting the Cortex...",
+            category: 'concept',
+            tags: ['_status_gold'], // Triggers Gold Material
+            created_at: new Date().toISOString()
+        };
+
+        setNodes(prev => [...prev, bridgeNode]);
+        setNodeCount(prev => prev + 1);
+
+        // Add connections A <-> Bridge <-> B
+        // Note: We deliberately do NOT add A <-> B direct link here.
+        setLinks(prev => [
+            ...prev, 
+            { id: `${sourceId}-${newId}`, source: sourceId, target: newId, length: sourceNode.position.distanceTo(midPos) },
+            { id: `${newId}-${targetId}`, source: newId, target: targetId, length: targetNode.position.distanceTo(midPos) }
+        ]);
+
+        // Update neighbors
         setNodes(prev => prev.map(n => {
-            if (n.id === sourceId) return { ...n, connections: [...n.connections, targetId] };
-            if (n.id === targetId) return { ...n, connections: [...n.connections, sourceId] };
+            if (n.id === sourceId && !n.connections.includes(newId)) return { ...n, connections: [...n.connections, newId] };
+            if (n.id === targetId && !n.connections.includes(newId)) return { ...n, connections: [...n.connections, newId] };
             return n;
         }));
-    }, [links, nodes]);
+
+        return newId;
+    }, [nodes]);
+
+    // 2. Resolve the bridge with real data
+    const resolveBridgeNode = useCallback((id: number, data: any) => {
+        setNodes(prev => prev.map(n => {
+            if (n.id === id) {
+                // SAFEGUARD: Ensure _status_entropy is REMOVED if passed in, to stop physics engine.
+                const rawTags = data.tags || [];
+                const safeTags = rawTags.filter((t: string) => t !== '_status_entropy');
+                const combinedTags = [...safeTags, '_status_gold']; 
+                return {
+                    ...n,
+                    title: data.title,
+                    content: data.content,
+                    tags: combinedTags
+                };
+            }
+            return n;
+        }));
+
+        // 3. Cooldown Timer: Remove gold status after 3 seconds
+        setTimeout(() => {
+             setNodes(prev => prev.map(n => {
+                if (n.id === id) {
+                    return {
+                        ...n,
+                        tags: n.tags.filter(t => t !== '_status_gold' && t !== '_status_entropy')
+                    };
+                }
+                return n;
+             }));
+        }, 3000);
+
+    }, []);
+
+    // --- INFERENCE (GAP ANALYSIS) LOGIC ---
+    const spawnGhostNodes = useCallback((suggestions: any[], sourceNodes: NodeData[]) => {
+        // Calculate Center of Mass of source nodes to spawn ghosts near them
+        let center = new THREE.Vector3(0,0,0);
+        if (sourceNodes.length > 0) {
+            sourceNodes.forEach(n => center.add(n.position));
+            center.divideScalar(sourceNodes.length);
+        }
+
+        const newNodes: NodeData[] = suggestions.map((s, i) => {
+            const newId = (nodes.length > 0 ? Math.max(...nodes.map(n => n.id)) : 0) + i + 1;
+            
+            // Random offset from center to place in "negative space"
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const r = 10 + Math.random() * 10; // 10-20 units away
+            
+            const x = center.x + r * Math.sin(phi) * Math.cos(theta);
+            const y = center.y + r * Math.sin(phi) * Math.sin(theta);
+            const z = center.z + r * Math.cos(phi);
+
+            // Construct rich content from new AI schema
+            // If domain/type are missing (backward compat), fallback gracefully
+            const domainStr = s.detected_domain ? `**Domain:** \`${s.detected_domain}\` | ` : '';
+            const typeStr = s.type ? `**Type:** *${s.type}*\n\n` : '';
+            
+            let citationsStr = '';
+            if (s.citations && Array.isArray(s.citations) && s.citations.length > 0) {
+                citationsStr = `\n**References:**\n${s.citations.map((c: string) => `- ${c}`).join('\n')}\n`;
+            }
+
+            const content = `### Missing Concept: ${s.title}
+
+${domainStr}${typeStr}**Significance:** ${s.why_it_matters}
+
+**Research Inquiry:** *${s.open_question}*
+${citationsStr}
+---
+*Click to Materialize this node via Cortex AI.*`;
+
+            return {
+                id: newId,
+                position: new THREE.Vector3(x, y, z),
+                connections: [],
+                activity: 0,
+                title: s.title,
+                content: content,
+                category: s.category || 'concept', // Use suggested category (e.g., diamond for contradiction)
+                tags: ['ghost'],
+                created_at: new Date().toISOString(),
+                isGhost: true
+            };
+        });
+
+        setNodes(prev => [...prev, ...newNodes]);
+        setNodeCount(prev => prev + newNodes.length);
+        
+        // Intelligent Linking based on AI suggestion
+        const newLinks: LinkData[] = [];
+        
+        newNodes.forEach((ghost, i) => {
+            const suggestion = suggestions[i];
+            let hasIntelligentLink = false;
+
+            // Try to link to suggested existing nodes by title
+            if (suggestion.connects_to && Array.isArray(suggestion.connects_to)) {
+                suggestion.connects_to.forEach((targetTitle: string) => {
+                    const targetNode = nodes.find(n => n.title.toLowerCase() === targetTitle.toLowerCase());
+                    if (targetNode) {
+                        const dist = ghost.position.distanceTo(targetNode.position);
+                        newLinks.push({
+                            id: `${targetNode.id}-${ghost.id}`,
+                            source: targetNode.id,
+                            target: ghost.id,
+                            length: dist
+                        });
+                        ghost.connections.push(targetNode.id);
+                        hasIntelligentLink = true;
+                    }
+                });
+            }
+
+            // Fallback: Connect ghosts to random source nodes if no specific links were found or possible
+            if (!hasIntelligentLink && sourceNodes.length > 0) {
+                const randomSource = sourceNodes[Math.floor(Math.random() * sourceNodes.length)];
+                newLinks.push({
+                    id: `${randomSource.id}-${ghost.id}`,
+                    source: randomSource.id,
+                    target: ghost.id,
+                    length: 15
+                });
+                ghost.connections.push(randomSource.id);
+            }
+        });
+            
+        setLinks(prev => [...prev, ...newLinks]);
+        
+        // Update existing nodes with new connections
+        setNodes(prev => prev.map(n => {
+                const linkedGhosts = newNodes.filter(g => g.connections.includes(n.id));
+                if (linkedGhosts.length > 0) {
+                    const newIds = linkedGhosts.map(g => g.id).filter(id => !n.connections.includes(id));
+                    if (newIds.length > 0) {
+                        return { ...n, connections: [...n.connections, ...newIds] };
+                    }
+                }
+                return n;
+        }));
+
+    }, [nodes]);
+
+    const startMaterialization = useCallback((id: number) => {
+        setNodes(prev => prev.map(n => {
+            if (n.id === id) {
+                return {
+                    ...n,
+                    isGhost: false, // CRITICAL: This protects the node from removeGhostNodes()
+                    title: "Materializing...",
+                    // Replace 'ghost' tag with 'materializing' status
+                    tags: [...n.tags.filter(t => t !== 'ghost'), '_status_materializing']
+                };
+            }
+            return n;
+        }));
+    }, []);
+
+    // ERROR HANDLING HELPER: Reverts a materializing node back to ghost state
+    const revertMaterialization = useCallback((id: number) => {
+        setNodes(prev => prev.map(n => {
+            if (n.id === id) {
+                return {
+                    ...n,
+                    isGhost: true, // Back to ghost
+                    title: "Signal Failed",
+                    tags: [...n.tags.filter(t => t !== '_status_materializing'), 'ghost']
+                };
+            }
+            return n;
+        }));
+    }, []);
+
+    const materializeGhostNode = useCallback((id: number, data: any) => {
+        setNodes(prev => prev.map(n => {
+            if (n.id === id) {
+                return {
+                    ...n,
+                    title: data.title,
+                    content: data.content,
+                    category: data.category as any,
+                    tags: data.tags,
+                    citation: data.citation,
+                    isGhost: false // Materialized!
+                };
+            }
+            return n;
+        }));
+    }, []);
+
+    const removeGhostNodes = useCallback(() => {
+        setNodes(prevNodes => {
+            const ghostIds = new Set(prevNodes.filter(n => n.isGhost).map(n => n.id));
+            if (ghostIds.size === 0) return prevNodes;
+
+            const survivors = prevNodes.filter(n => !n.isGhost).map(n => ({
+                ...n,
+                // Clean connections to ghosts
+                connections: n.connections.filter(cId => !ghostIds.has(cId))
+            }));
+            
+            // Clean links
+            setLinks(prevLinks => prevLinks.filter(l => !ghostIds.has(l.source) && !ghostIds.has(l.target)));
+            setNodeCount(prev => prev - ghostIds.size);
+            
+            return survivors;
+        });
+    }, []);
+
 
     const updateTagColor = useCallback((tag: string, color: string) => {
         setTagColors(prev => ({ ...prev, [tag.toLowerCase()]: color }));
@@ -380,7 +653,7 @@ export const useGraphData = () => {
             activity: 0,
             title: aiResponse.rootTitle || "Document Root",
             content: aiResponse.rootSummary || "# Summary\n...",
-            category: 'concept',
+            category: 'archive', // Force Cube for Root (Source PDF)
             tags: ['source', 'pdf'],
             created_at: new Date().toISOString()
         };
@@ -410,8 +683,9 @@ export const useGraphData = () => {
                     activity: 0,
                     title: n.title,
                     content: n.description || `# ${n.title}`,
-                    category: n.category || 'concept',
+                    category: 'concept', // Force Sphere for children
                     tags: n.tags || [],
+                    citation: n.citation,
                     created_at: new Date().toISOString()
                 });
                 titleToId.set(n.title, id);
@@ -419,9 +693,8 @@ export const useGraphData = () => {
         }
 
         // 4. Process Links
-        // Link Root to first few children automatically (star topology)
         newNodes.slice(1).forEach(child => {
-            if (Math.random() > 0.3) { // 70% chance to link to root
+            if (Math.random() > 0.3) {
                 newLinks.push({
                     id: `${rootId}-${child.id}`,
                     source: rootId,
@@ -433,7 +706,6 @@ export const useGraphData = () => {
             }
         });
 
-        // AI Relationships
         if (Array.isArray(aiResponse.relationships)) {
             aiResponse.relationships.forEach((rel: any) => {
                 const sId = titleToId.get(rel.source);
@@ -454,7 +726,90 @@ export const useGraphData = () => {
             });
         }
 
-        // 5. Trigger Animation
+        setInjectionQueue({ nodes: newNodes, links: newLinks });
+
+    }, [nodes]);
+
+    // SPECIALIZED RESEARCH INJECTION
+    const injectResearchUniverse = useCallback((aiResponse: any) => {
+        let currentMaxId = nodes.length > 0 ? Math.max(...nodes.map(n => n.id)) : 0;
+        const newNodes: NodeData[] = [];
+        const newLinks: LinkData[] = [];
+        const titleToId = new Map<string, number>();
+
+        const rawNodes = aiResponse.nodes || [];
+        
+        // 1. Identify and Place 'archive' (Source Paper) nodes first
+        // They form a central ring
+        const archiveNodes = rawNodes.filter((n: any) => n.category === 'archive');
+        const conceptNodes = rawNodes.filter((n: any) => n.category !== 'archive');
+
+        const archiveRadius = 10;
+        archiveNodes.forEach((n: any, idx: number) => {
+            const id = ++currentMaxId;
+            const theta = (idx / archiveNodes.length) * Math.PI * 2;
+            const x = Math.cos(theta) * archiveRadius;
+            const z = Math.sin(theta) * archiveRadius;
+            
+            const node: NodeData = {
+                id,
+                position: new THREE.Vector3(x, 0, z),
+                connections: [],
+                activity: 0,
+                title: n.title,
+                content: n.content,
+                category: 'archive',
+                tags: n.tags || ['source'],
+                citation: n.citation,
+                created_at: new Date().toISOString()
+            };
+            newNodes.push(node);
+            titleToId.set(n.title, id);
+        });
+
+        // 2. Place Concepts (Explode from center or related paper)
+        conceptNodes.forEach((n: any) => {
+            const id = ++currentMaxId;
+            // Spawn near origin but random
+            const pos = new THREE.Vector3((Math.random()-0.5)*5, (Math.random()-0.5)*5, (Math.random()-0.5)*5);
+            
+            const node: NodeData = {
+                id,
+                position: pos,
+                connections: [],
+                activity: 0,
+                title: n.title,
+                content: n.content,
+                category: n.category || 'concept',
+                tags: n.tags || [],
+                citation: n.citation,
+                created_at: new Date().toISOString()
+            };
+            newNodes.push(node);
+            titleToId.set(n.title, id);
+        });
+
+        // 3. Links
+        if (Array.isArray(aiResponse.links)) {
+            aiResponse.links.forEach((link: any) => {
+                const sId = titleToId.get(link.source);
+                const tId = titleToId.get(link.target);
+                
+                if (sId && tId) {
+                    newLinks.push({
+                        id: `${sId}-${tId}`,
+                        source: sId,
+                        target: tId,
+                        length: 15
+                    });
+                    const s = newNodes.find(x => x.id === sId);
+                    const t = newNodes.find(x => x.id === tId);
+                    if (s) s.connections.push(tId);
+                    if (t) t.connections.push(sId);
+                }
+            });
+        }
+
         setInjectionQueue({ nodes: newNodes, links: newLinks });
 
     }, [nodes]);
@@ -473,11 +828,21 @@ export const useGraphData = () => {
         addNode,
         updateNode,
         removeNode,
-        addLink,
+        toggleConnection,
         updateTagColor,
         importData,
         startReset,
         loadDemo,
-        injectGraphCluster
+        injectGraphCluster,
+        injectResearchUniverse,
+        // Synthesis Actions
+        spawnBridgeNode,
+        resolveBridgeNode,
+        // Gap Analysis Actions
+        spawnGhostNodes,
+        materializeGhostNode,
+        removeGhostNodes,
+        startMaterialization,
+        revertMaterialization // EXPORTED
     };
 };

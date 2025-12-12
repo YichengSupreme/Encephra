@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { NodeMesh, Connection, Signal } from './SceneComponents';
+import { NodeMesh, Connection, Signal, LightningConnection } from './SceneComponents';
 import { SignalParticle, NodeData, LinkData } from '../types';
 
 interface NetworkGraphProps {
@@ -10,52 +10,54 @@ interface NetworkGraphProps {
   selectedNodeId: number | null;
   onNodeClick: (id: number) => void;
   searchQuery: string;
+  searchMode: 'title' | 'tag';
   tagColors: Record<string, string>;
   clusterStrength: number;
   isLinkMode: boolean;
   linkSourceId: number | null; 
   isDeleteMode: boolean; 
+  isEngramMode: boolean;
+  engramSelection: Set<number>;
+  isInferenceMode: boolean;
+  inferenceSelection: Set<number>;
+  isEntropyMode: boolean;
+  entropySelection: Set<number>;
+  onHoverNode?: (id: number | null) => void;
 }
 
-// Simple ID generator to replace uuid
 const generateId = () => Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
 
-const CameraController: React.FC<{ targetNode: NodeData | null }> = ({ targetNode }) => {
-    const { camera, controls } = useThree();
-    
+const CameraController: React.FC<{ targetNode: NodeData | null, entropyTarget: THREE.Vector3 | null }> = ({ targetNode, entropyTarget }) => {
+    const { controls } = useThree();
     useFrame((state, delta) => {
         // @ts-ignore
         const orbitControls = controls as any;
-        if (targetNode && orbitControls) {
-            const targetPos = targetNode.position;
-            // Safety check
-            if (Number.isFinite(targetPos.x) && Number.isFinite(targetPos.y)) {
-                orbitControls.target.lerp(targetPos, delta * 2);
+        if (orbitControls) {
+            if (entropyTarget) {
+                 orbitControls.target.lerp(entropyTarget, delta * 3);
+            } else if (targetNode) {
+                const targetPos = targetNode.position;
+                if (Number.isFinite(targetPos.x)) {
+                    orbitControls.target.lerp(targetPos, delta * 2);
+                }
             }
         }
     });
-
     return null;
 }
 
-// Visual component for the "Synapse" being built
 const GhostSynapse: React.FC<{ startPos: THREE.Vector3 }> = ({ startPos }) => {
     const { camera, pointer } = useThree();
     const geometryRef = useRef<THREE.BufferGeometry>(null);
-
-    // Initial buffer
     const positions = useMemo(() => new Float32Array(6), []);
 
     useFrame(() => {
         if (!startPos || !geometryRef.current) return;
-
-        // Project pointer to a reasonable depth
         const vector = new THREE.Vector3(pointer.x, pointer.y, 0.5);
         vector.unproject(camera);
         const dir = vector.sub(camera.position).normalize();
         const targetDistance = camera.position.distanceTo(startPos);
         const pos = camera.position.clone().add(dir.multiplyScalar(targetDistance));
-        
         const posAttr = geometryRef.current.attributes.position;
         if (posAttr && Number.isFinite(pos.x)) {
              posAttr.setXYZ(0, startPos.x, startPos.y, startPos.z);
@@ -65,310 +67,337 @@ const GhostSynapse: React.FC<{ startPos: THREE.Vector3 }> = ({ startPos }) => {
     });
 
     if (!startPos) return null;
-
     return (
         <line>
             <bufferGeometry ref={geometryRef}>
-                <bufferAttribute
-                    attach="attributes-position"
-                    count={2}
-                    array={positions}
-                    itemSize={3}
-                />
+                <bufferAttribute attach="attributes-position" count={2} array={positions} itemSize={3} />
             </bufferGeometry>
-            <lineBasicMaterial 
-                color="#a855f7" 
-                opacity={0.6}
-                transparent
-            />
+            <lineBasicMaterial color="#a855f7" opacity={0.6} transparent />
         </line>
     );
 };
 
-export const NetworkGraph: React.FC<NetworkGraphProps> = ({ 
-    nodes, links, selectedNodeId, onNodeClick, searchQuery, tagColors, clusterStrength,
-    isLinkMode, linkSourceId, isDeleteMode
-}) => {
-  const speed = 0.5;
+const EngramWeb: React.FC<{ nodes: NodeData[], selection: Set<number> }> = ({ nodes, selection }) => {
+    const geometryRef = useRef<THREE.BufferGeometry>(null);
+    const selectedNodes = useMemo(() => nodes.filter(n => selection.has(n.id)), [nodes, selection]);
+    const lines = useMemo(() => {
+        const positions: number[] = [];
+        if (selectedNodes.length < 2) return new Float32Array(0);
+        for (let i = 0; i < selectedNodes.length; i++) {
+            for (let j = i + 1; j < selectedNodes.length; j++) {
+                const p1 = selectedNodes[i].position;
+                const p2 = selectedNodes[j].position;
+                positions.push(p1.x, p1.y, p1.z);
+                positions.push(p2.x, p2.y, p2.z);
+            }
+        }
+        return new Float32Array(positions);
+    }, [selectedNodes]);
 
+    useFrame(() => {
+        if (geometryRef.current && selectedNodes.length >= 2) {
+             const posAttr = geometryRef.current.attributes.position;
+             if (!posAttr || posAttr.count * 3 !== lines.length) return;
+             let idx = 0;
+             const array = posAttr.array as Float32Array;
+             for (let i = 0; i < selectedNodes.length; i++) {
+                for (let j = i + 1; j < selectedNodes.length; j++) {
+                    const p1 = selectedNodes[i].position;
+                    const p2 = selectedNodes[j].position;
+                    array[idx++] = p1.x; array[idx++] = p1.y; array[idx++] = p1.z;
+                    array[idx++] = p2.x; array[idx++] = p2.y; array[idx++] = p2.z;
+                }
+             }
+             posAttr.needsUpdate = true;
+        }
+    });
+
+    if (selectedNodes.length < 2) return null;
+    return (
+        <lineSegments>
+            <bufferGeometry ref={geometryRef} key={lines.length}>
+                <bufferAttribute attach="attributes-position" count={lines.length / 3} array={lines} itemSize={3} />
+            </bufferGeometry>
+            <lineBasicMaterial color="#FFD700" opacity={0.3} transparent depthWrite={false} blending={THREE.AdditiveBlending} />
+        </lineSegments>
+    );
+};
+
+export const NetworkGraph: React.FC<NetworkGraphProps> = ({ 
+    nodes, links, selectedNodeId, onNodeClick, searchQuery, searchMode, tagColors, clusterStrength,
+    isLinkMode, linkSourceId, isDeleteMode, isEngramMode, engramSelection, 
+    isInferenceMode, inferenceSelection, onHoverNode, isEntropyMode, entropySelection
+}) => {
   const [signals, setSignals] = useState<SignalParticle[]>([]);
-  const [activeNodes, setActiveNodes] = useState<Set<number>>(new Set());
   const [hoveredNode, setHoveredNode] = useState<number | null>(null);
 
-  // Refs for physics
-  const nodeRefs = useRef<Record<number, THREE.Mesh>>({});
+  // Optimizations
+  const nodeRefs = useRef<Record<number, any>>({});
   const velocities = useRef<Record<number, THREE.Vector3>>({});
+  const frameCounter = useRef(0);
   
-  // Create a fast lookup map for nodes by ID to avoid O(n) lookups
+  // Reusable vectors for physics loop to reduce GC
+  const vecForce = useMemo(() => new THREE.Vector3(), []);
+  const vecDiff = useMemo(() => new THREE.Vector3(), []);
+  const vecDir = useMemo(() => new THREE.Vector3(), []);
+  
   const nodeMap = useMemo(() => {
     const map = new Map<number, NodeData>();
     nodes.forEach(n => map.set(n.id, n));
     return map;
   }, [nodes]);
 
-  // Search filtering
+  // Entropy Target Calculation (Midpoint of 2 selected nodes)
+  const entropyTarget = useMemo(() => {
+      const entropyNode = nodes.find(n => n.tags.includes('_status_entropy'));
+      if (entropyNode && entropyNode.position) return entropyNode.position;
+
+      if (isEntropyMode && entropySelection.size === 2) {
+          const ids = Array.from(entropySelection);
+          const n1 = nodeMap.get(ids[0]);
+          const n2 = nodeMap.get(ids[1]);
+          if (n1?.position && n2?.position) {
+              return n1.position.clone().add(n2.position).multiplyScalar(0.5);
+          }
+      }
+      return null;
+  }, [nodes, isEntropyMode, entropySelection, nodeMap]);
+
+  // Search
   const filteredNodeIds = useMemo(() => {
     if (!searchQuery) return new Set<number>();
     const lowerQ = searchQuery.toLowerCase();
     const ids = new Set<number>();
     nodes.forEach(node => {
-        if (node.title.toLowerCase().includes(lowerQ) || node.tags.some(t => t.toLowerCase().includes(lowerQ))) {
-            ids.add(node.id);
+        if (searchMode === 'title') {
+            if (node.title.toLowerCase().includes(lowerQ)) ids.add(node.id);
+        } else {
+            if (node.tags.some(t => t.toLowerCase().includes(lowerQ))) ids.add(node.id);
         }
     });
     return ids;
-  }, [searchQuery, nodes]);
+  }, [searchQuery, nodes, searchMode]);
 
-  // Initialize velocities
   useEffect(() => {
     nodes.forEach(node => {
-      if (!velocities.current[node.id]) {
-        velocities.current[node.id] = new THREE.Vector3(0, 0, 0);
-      }
+      if (!velocities.current[node.id]) velocities.current[node.id] = new THREE.Vector3(0, 0, 0);
     });
   }, [nodes]);
 
-  // Physics & Animation Loop
+  const handleNodeHover = (id: number | null) => { setHoveredNode(id); if (onHoverNode) onHoverNode(id); };
+
   useFrame((state, delta) => {
-    // Clamp delta to prevent physics explosions on frame drops
     const safeDelta = Math.min(delta, 0.05);
+    const elapsedTime = state.clock.elapsedTime;
+    frameCounter.current += 1;
 
-    // 1. Signal Animation
-    const timeScale = safeDelta * speed * 4;
-    setSignals(prevSignals => {
-      const nextSignals: SignalParticle[] = [];
-      const arrivedSignals: SignalParticle[] = [];
-
-      prevSignals.forEach(sig => {
-        sig.progress += sig.speed * timeScale;
-        if (sig.progress >= 1) {
-          arrivedSignals.push(sig);
-        } else {
-          nextSignals.push(sig);
+    // --- Signal Pruning (Batched) ---
+    // Instead of filtering every frame, we do a check every 500ms approx via simpler random check or just let them live
+    // For hackathon, we only setSignals when user clicks, so it's fine to clean them up lazily
+    // BUT we need to trigger node pulses when signals arrive
+    
+    // Iterate active signals to trigger pulses on target nodes
+    // Note: We are iterating state 'signals' here, which is fine as we are not setting state
+    signals.forEach(sig => {
+        const age = (elapsedTime - sig.startTime) * sig.speed;
+        if (age >= 1.0 && age <= 1.1) { 
+             // Signal arrived roughly now. Trigger pulse on target
+             const targetMesh = nodeRefs.current[sig.targetId];
+             if (targetMesh && targetMesh.triggerPulse) {
+                 targetMesh.triggerPulse();
+             }
         }
-      });
-
-      if (arrivedSignals.length > 0) {
-        const newlyActive = new Set<number>();
-        arrivedSignals.forEach(sig => newlyActive.add(sig.targetId));
-        
-        if (newlyActive.size > 0) {
-            setActiveNodes(prev => {
-                const next = new Set(prev);
-                newlyActive.forEach(id => next.add(id));
-                return next;
-            });
-            setTimeout(() => {
-                setActiveNodes(prev => {
-                    const next = new Set(prev);
-                    newlyActive.forEach(id => next.delete(id));
-                    return next;
-                });
-            }, 300);
-        }
-      }
-      return nextSignals;
     });
+    
+    // Cleanup old signals every ~1s (when frame count mod 60 === 0)
+    // Using a ref to track last cleanup time would be better but this is a demo
+    if (frameCounter.current % 60 === 0 && signals.length > 0) {
+         const activeSignals = signals.filter(s => (elapsedTime - s.startTime) * s.speed < 1.2);
+         if (activeSignals.length !== signals.length) {
+             setSignals(activeSignals);
+         }
+    }
 
-    // 2. Physics Simulation
-    const damping = 0.9;
-    const repulsionStrength = 2.0;
-    const springStrength = 0.05;
-    const centeringStrength = 0.02;
-
-    // Apply forces
+    // --- Physics ---
     nodes.forEach(node => {
-       if (node.id === selectedNodeId) return; // Selected node stays still
-
+       if (node.id === selectedNodeId) return;
        const velocity = velocities.current[node.id];
-       if (!velocity) return;
-
-       const force = new THREE.Vector3(0,0,0);
-
-       // Self-healing: If position is NaN, reset it
-       if (!Number.isFinite(node.position.x) || !Number.isFinite(node.position.y) || !Number.isFinite(node.position.z)) {
-            node.position.set( (Math.random()-0.5)*10, (Math.random()-0.5)*10, (Math.random()-0.5)*10 );
-            velocity.set(0,0,0);
+       if (!velocity || !node.position) return;
+       
+       // FREEZE ENTROPY NODE
+       if (node.tags.includes('_status_entropy')) {
+           velocity.set(0, 0, 0);
+           return;
        }
 
-       // Centering Force (Gravity to origin)
-       if (Number.isFinite(node.position.x)) {
-           force.add(node.position.clone().multiplyScalar(-centeringStrength));
-       }
+       vecForce.set(0,0,0);
 
-       // Cluster Force (Attraction to same tags)
-       if (clusterStrength > 0.01) {
+       if (!Number.isFinite(node.position.x)) { node.position.set(0,0,0); velocity.set(0,0,0); }
+       
+       // Gravity to center
+       vecForce.add(node.position.clone().multiplyScalar(node.isGhost ? -0.004 : -0.02)); 
+
+       // Clustering
+       if (clusterStrength > 0.01 && !node.isGhost) {
            nodes.forEach(other => {
-               if (node.id === other.id) return;
-               // Check tag match
-               const hasSharedTag = node.tags.length > 0 && other.tags.length > 0 && node.tags[0] === other.tags[0];
-               if (hasSharedTag) {
-                   const diff = other.position.clone().sub(node.position);
-                   const dist = diff.length();
-                   if (dist > 0) {
-                       diff.normalize().multiplyScalar(dist * clusterStrength * 0.05); // Weak gravity
-                       force.add(diff);
+               if (node.id === other.id || other.isGhost) return;
+               
+               if (node.tags[0] && other.tags[0] && node.tags[0] === other.tags[0]) {
+                   if (!other.position) return;
+                   vecDiff.copy(other.position).sub(node.position);
+                   const lenSq = vecDiff.lengthSq();
+                   if (lenSq > 0) {
+                        // Normalize manually to avoid alloc
+                        const len = Math.sqrt(lenSq);
+                        vecDiff.multiplyScalar((1/len) * len * clusterStrength * 0.05);
+                        vecForce.add(vecDiff);
                    }
                }
            });
        }
 
-       // Repulsion Force (Keep apart)
+       // Repulsion
        nodes.forEach(other => {
-           if (node.id === other.id) return;
-           const diff = node.position.clone().sub(other.position);
-           const dist = diff.length();
-           if (dist < 15 && dist > 0.1) {
-               const repulsion = diff.normalize().multiplyScalar(repulsionStrength / (dist * dist));
-               force.add(repulsion);
+           if (node.id === other.id || !other.position) return;
+           vecDiff.copy(node.position).sub(other.position);
+           const distSq = vecDiff.lengthSq();
+           
+           const rep = (node.isGhost || other.isGhost) ? 4.0 : 2.0;
+           const archiveMultiplier = (node.category === 'archive' || other.category === 'archive') ? 5.0 : 1.0;
+
+           // Optimization: Check distSq instead of sqrt(dist)
+           // 15*15 = 225
+           if (distSq < 225 && distSq > 0.01) {
+               const dist = Math.sqrt(distSq);
+               vecDiff.normalize().multiplyScalar((rep * archiveMultiplier) / distSq);
+               vecForce.add(vecDiff);
            }
        });
 
-       velocity.add(force);
+       velocity.add(vecForce);
     });
 
-    // Spring Forces (Connections)
+    // Link Constraints
     links.forEach(link => {
        const source = nodeMap.get(link.source);
        const target = nodeMap.get(link.target);
-       
-       if (!source || !target) return;
+       if (!source || !target || !source.position || !target.position) return;
        
        const dist = source.position.distanceTo(target.position);
-       const restingLength = 8;
-       
        if (dist > 0) {
-           const forceMag = (dist - restingLength) * springStrength;
-           const dir = target.position.clone().sub(source.position).normalize();
+           const forceMag = (dist - 8) * 0.05;
+           vecDir.copy(target.position).sub(source.position).normalize();
            
-           if (source.id !== selectedNodeId) {
-             velocities.current[source.id]?.add(dir.clone().multiplyScalar(forceMag));
-           }
-           if (target.id !== selectedNodeId) {
-             velocities.current[target.id]?.add(dir.clone().multiplyScalar(-forceMag));
-           }
+           if (source.id !== selectedNodeId) velocities.current[source.id]?.add(vecDir.clone().multiplyScalar(forceMag));
+           if (target.id !== selectedNodeId) velocities.current[target.id]?.add(vecDir.clone().multiplyScalar(-forceMag));
        }
     });
 
-    // Update Positions
+    // Apply Velocity
     nodes.forEach(node => {
         if (node.id === selectedNodeId) return;
         const vel = velocities.current[node.id];
-        if (vel) {
-            vel.multiplyScalar(damping);
+        if (vel && node.position) {
             
-            // Validate velocity before applying
-            if (Number.isFinite(vel.x) && Number.isFinite(vel.y) && Number.isFinite(vel.z)) {
-                node.position.add(vel.clone().multiplyScalar(safeDelta * 20)); 
+            // Drag
+            if (node.category === 'archive') {
+                vel.multiplyScalar(0.85); 
             } else {
-                 // Reset velocity if corrupt
-                 vel.set(0,0,0);
+                vel.multiplyScalar(0.9);
             }
-            
-            // Update Mesh
-            if (nodeRefs.current[node.id]) {
-                nodeRefs.current[node.id].position.copy(node.position);
+
+            if (Number.isFinite(vel.x)) {
+                 const moveScale = node.category === 'archive' ? 0.2 : 1.0;
+                 // Manually add
+                 node.position.x += vel.x * safeDelta * 20 * moveScale;
+                 node.position.y += vel.y * safeDelta * 20 * moveScale;
+                 node.position.z += vel.z * safeDelta * 20 * moveScale;
             }
+            if (nodeRefs.current[node.id]) nodeRefs.current[node.id].position.copy(node.position);
         }
     });
-
   });
 
+  // Use the Three.js clock to manage signal start times
+  const { clock } = useThree();
+
   const handleNodeClick = (id: number) => {
-    // Only fire signal animations if NOT in delete mode
-    if (!isDeleteMode) {
+    if (!isDeleteMode && !isEngramMode && !isInferenceMode && !isEntropyMode) {
         const node = nodeMap.get(id);
         if (node) {
-            const newSignals = node.connections.map(targetId => ({
-                id: generateId(),
-                sourceId: id,
-                targetId: targetId,
-                progress: 0,
-                speed: 1.0
+            const newSignals = node.connections.map(targetId => ({ 
+                id: generateId(), 
+                sourceId: id, 
+                targetId, 
+                startTime: clock.elapsedTime, // Use clock time
+                speed: 1.0 
             }));
             setSignals(prev => [...prev, ...newSignals]);
+            
+            // Trigger local pulse immediately
+            if (nodeRefs.current[id] && nodeRefs.current[id].triggerPulse) {
+                nodeRefs.current[id].triggerPulse();
+            }
         }
     }
-    
-    // Bubble up to parent
     onNodeClick(id);
   };
 
-  const selectedNodeData = useMemo(() => 
-    selectedNodeId !== null ? nodeMap.get(selectedNodeId) || null : null
-  , [nodeMap, selectedNodeId]);
+  const selectedNodeData = useMemo(() => selectedNodeId !== null ? nodeMap.get(selectedNodeId) || null : null, [nodeMap, selectedNodeId]);
+  const linkSourceNode = useMemo(() => linkSourceId !== null ? nodeMap.get(linkSourceId) || null : null, [nodeMap, linkSourceId]);
 
-  const linkSourceNode = useMemo(() => 
-     linkSourceId !== null ? nodeMap.get(linkSourceId) || null : null
-  , [nodeMap, linkSourceId]);
-
-  // Adjust cursor based on mode
   useEffect(() => {
-    if (isDeleteMode) {
-        document.body.style.cursor = 'not-allowed';
-    } else if (isLinkMode) {
-        document.body.style.cursor = 'crosshair';
-    } else {
-        document.body.style.cursor = 'auto';
-    }
+    document.body.style.cursor = isDeleteMode ? 'not-allowed' : isLinkMode ? 'crosshair' : isEngramMode ? 'alias' : isInferenceMode ? 'help' : isEntropyMode ? 'crosshair' : 'auto';
     return () => { document.body.style.cursor = 'auto'; };
-  }, [isLinkMode, isDeleteMode]);
-
+  }, [isLinkMode, isDeleteMode, isEngramMode, isInferenceMode, isEntropyMode]);
 
   return (
     <group>
-      <CameraController targetNode={selectedNodeData} />
-
-      {/* Ghost Synapse for Link Mode */}
-      {isLinkMode && linkSourceNode && (
-          <GhostSynapse startPos={linkSourceNode.position} />
-      )}
+      <CameraController targetNode={selectedNodeData} entropyTarget={entropyTarget} />
+      {isLinkMode && linkSourceNode && <GhostSynapse startPos={linkSourceNode.position} />}
+      {isEngramMode && engramSelection.size > 0 && <EngramWeb nodes={nodes} selection={engramSelection} />}
+      
+      {isEntropyMode && entropySelection.size === 2 && (() => {
+          const ids = Array.from(entropySelection);
+          const n1 = nodeMap.get(ids[0]);
+          const n2 = nodeMap.get(ids[1]);
+          if (n1?.position && n2?.position) return <LightningConnection startNode={n1} endNode={n2} />;
+          return null;
+      })()}
 
       {nodes.map(node => {
         const isDimmed = searchQuery !== "" && !filteredNodeIds.has(node.id) && selectedNodeId !== node.id;
-        // In link mode, highlight potential targets
-        const isPotentialTarget = isLinkMode && linkSourceId !== null && linkSourceId !== node.id;
+        const isPotentialTarget = (isLinkMode && linkSourceId !== null && linkSourceId !== node.id);
+        const isEngramSelected = isEngramMode && engramSelection.has(node.id);
+        const isInferenceSelected = isInferenceMode && inferenceSelection.has(node.id);
+        const isEntropySelected = isEntropyMode && entropySelection.has(node.id);
+        const effectiveTags = (isEngramSelected || isInferenceSelected || isEntropySelected) ? [...node.tags, '_status_gold'] : node.tags;
         
         return (
             <NodeMesh 
                 key={node.id} 
                 ref={(el) => { if (el) nodeRefs.current[node.id] = el; }}
-                data={node} 
-                isActive={activeNodes.has(node.id) || isPotentialTarget}
-                isSelected={selectedNodeId === node.id || linkSourceId === node.id}
-                isDimmed={isDimmed}
-                isDeleteMode={isDeleteMode} 
-                tagColors={tagColors} 
-                onHover={setHoveredNode}
-                onClick={handleNodeClick}
+                data={{...node, tags: effectiveTags}} 
+                isActive={isPotentialTarget || isEngramSelected || isInferenceSelected || isEntropySelected}
+                isSelected={selectedNodeId === node.id || linkSourceId === node.id || isEngramSelected || isInferenceSelected || isEntropySelected}
+                isDimmed={isDimmed} isDeleteMode={isDeleteMode} tagColors={tagColors} onHover={handleNodeHover} onClick={handleNodeClick}
             />
         );
       })}
 
       {links.map(link => {
-          const sourceNode = nodeMap.get(link.source);
-          const targetNode = nodeMap.get(link.target);
-          
-          if (!sourceNode || !targetNode) return null;
+          const s = nodeMap.get(link.source);
+          const t = nodeMap.get(link.target);
+          if (!s || !t) return null;
+          if (!s.position || !t.position) return null; 
 
-          const isConnectedToHover = hoveredNode !== null && (link.source === hoveredNode || link.target === hoveredNode);
-          const isConnectedToSelected = selectedNodeId !== null && (link.source === selectedNodeId || link.target === selectedNodeId);
-          const isDimmed = searchQuery !== "";
-
-          return (
-            <Connection 
-                key={link.id} 
-                startNode={sourceNode}
-                endNode={targetNode}
-                isActive={isConnectedToHover || isConnectedToSelected}
-                isDimmed={isDimmed}
-            />
-          );
+          if (s.tags.includes('_status_entropy') || t.tags.includes('_status_entropy')) {
+              return <LightningConnection key={link.id} startNode={s} endNode={t} />;
+          }
+          const active = hoveredNode !== null && (link.source === hoveredNode || link.target === hoveredNode);
+          return <Connection key={link.id} startNode={s} endNode={t} isActive={active || selectedNodeId === link.source || selectedNodeId === link.target} isDimmed={searchQuery !== ""} />;
       })}
-
-      {signals.map(sig => (
-         <Signal key={sig.id} particle={sig} nodeMap={nodeMap} />
-      ))}
+      {signals.map(sig => <Signal key={sig.id} particle={sig} nodeMap={nodeMap} />)}
     </group>
   );
 };

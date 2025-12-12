@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type NodeCategory = 'concept' | 'project' | 'person' | 'archive' | 'feature' | 'default';
+export type NodeCategory = 'concept' | 'project' | 'person' | 'archive' | 'feature' | 'contradiction' | 'hypothesis' | 'decision' | 'default';
 
 export interface NodeData {
   id: number;
@@ -14,6 +14,12 @@ export interface NodeData {
   category: NodeCategory;
   tags: string[];
   created_at: string;
+  
+  // Source Tracking
+  citation?: string; // e.g. "Pg 4", "Smith 23, Fig 1"
+
+  // State flags
+  isGhost?: boolean;
 }
 
 export interface LinkData {
@@ -27,7 +33,7 @@ export interface SignalParticle {
   id: string;
   sourceId: number;
   targetId: number;
-  progress: number;
+  startTime: number;
   speed: number;
 }
 

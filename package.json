@@ -1,5 +1,5 @@
 {
-  "name": "3d-mind-map",
+  "name": "encephra",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,14 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@react-three/drei": "^10.7.7",
-    "three": "^0.182.0",
-    "lucide-react": "^0.559.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "@react-three/fiber": "^9.4.2",
+    "lucide-react": "^0.560.0",
+    "@google/genai": "^1.33.0",
+    "three": "^0.182.0",
+    "@react-three/drei": "^10.7.7",
     "@react-three/postprocessing": "^3.0.4",
-    "@google/genai": "^1.32.0"
+    "@react-three/fiber": "^9.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

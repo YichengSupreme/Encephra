@@ -20,7 +20,7 @@ if (!rootElement) {
 };
 
 console.log(
-  '%c 🧠 NeuroFlow 3D Loaded \n%c Type "hardReset()" in this console to wipe local storage and restart.', 
+  '%c 🧠 Encephra 3D Loaded \n%c Type "hardReset()" in this console to wipe local storage and restart.', 
   'font-weight: bold; font-size: 16px; color: #22d3ee;', 
   'color: #94a3b8;'
 );

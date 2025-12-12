@@ -9,8 +9,8 @@ export const getDemoGraph = (): GraphState => {
       position: new THREE.Vector3(0, 0, 0),
       connections: [],
       activity: 0,
-      title: "Welcome to NeuroFlow",
-      content: `# Welcome to NeuroFlow 3D\n\nThis is a **spatial knowledge graph** designed to visualize your thoughts as a living neural network.\n\n### How to Navigate\n- **Left Click + Drag**: Rotate Camera\n- **Right Click + Drag**: Pan Camera\n- **Scroll**: Zoom in/out\n- **Click Node**: Focus and Edit\n\nTry exploring the connected nodes to learn more!`,
+      title: "Welcome to Ensephra",
+      content: `# Welcome to Ensephra\n\nThis is a **spatial knowledge graph** designed to visualize your thoughts as a living neural network.\n\n### How to Navigate\n- **Left Click + Drag**: Rotate Camera\n- **Right Click + Drag**: Pan Camera\n- **Scroll**: Zoom in/out\n- **Click Node**: Focus and Edit\n\nTry exploring the connected nodes to learn more!`,
       category: 'concept',
       tags: ['guide', 'welcome'],
       created_at: new Date().toISOString()

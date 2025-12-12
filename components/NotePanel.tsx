@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { X, Tag, Calendar, Save, GripVertical, Eye, PenTool, Image as ImageIcon, Plus, Check } from 'lucide-react';
+import { X, Tag, Calendar, Save, GripVertical, Eye, PenTool, Image as ImageIcon, Plus, Check, Network, Unplug, Bookmark, ChevronDown, ChevronRight } from 'lucide-react';
 import { NodeData } from '../types';
 import { stringToColor } from './SceneComponents'; 
 
@@ -10,9 +10,10 @@ interface NotePanelProps {
   onUpdate: (updatedNode: NodeData) => void;
   tagColors: Record<string, string>;
   onTagColorChange: (tag: string, color: string) => void;
+  onToggleConnection: (sourceId: number, targetId: number) => void;
 }
 
-export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, onUpdate, tagColors, onTagColorChange }) => {
+export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, onUpdate, tagColors, onTagColorChange, onToggleConnection }) => {
   const [localNode, setLocalNode] = useState<NodeData | null>(null);
   const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -22,6 +23,10 @@ export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, o
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // UI State: Collapse/Expand
+  const [isTagsExpanded, setIsTagsExpanded] = useState(true);
+  const [isNetworkExpanded, setIsNetworkExpanded] = useState(true);
 
   useEffect(() => {
     if (node) {
@@ -55,10 +60,24 @@ export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, o
       );
   }, [availableTags, localNode, tagInput]);
 
+  // Find connected nodes for the "Connections" section
+  const connectedNodes = useMemo(() => {
+      if (!localNode) return [];
+      return localNode.connections.map(id => allNodes.find(n => n.id === id)).filter(Boolean) as NodeData[];
+  }, [localNode, allNodes]);
+
   const handleSave = () => {
     if (localNode) {
       onUpdate(localNode);
     }
+  };
+
+  const handleUnlink = (targetId: number) => {
+      if (localNode) {
+          // Safety: Auto-save text content before unlinking to prevent data loss on re-render
+          onUpdate(localNode);
+          onToggleConnection(localNode.id, targetId);
+      }
   };
 
   const addTag = (tag: string) => {
@@ -167,14 +186,25 @@ export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, o
   const primaryTagColor = localNode.tags.length > 0 ? getTagColor(localNode.tags[0]) : '#64748b';
 
   return (
-    <div className="h-full w-full flex flex-col">
-      {/* Header */}
-      <div className="p-6 border-b border-white/10 flex justify-between items-start shrink-0">
+    <div className="h-full w-full flex flex-col bg-[#0a0a0c]">
+      {/* Header (Fixed) */}
+      <div className="p-6 border-b border-white/10 flex justify-between items-start shrink-0 bg-[#0a0a0c] z-20 relative">
         <div className="flex flex-col gap-2 w-full mr-4">
-           {/* Primary Tag Indicator */}
-           <div className="flex items-center gap-2 text-xs font-mono text-slate-400 uppercase tracking-widest mb-1">
-              <span className="w-2 h-2 rounded-full shadow-[0_0_8px]" style={{backgroundColor: primaryTagColor, boxShadow: `0 0 8px ${primaryTagColor}`}}></span>
-              <span style={{color: primaryTagColor}}>{localNode.tags[0] || 'Uncategorized'}</span>
+           {/* Metadata Row: Primary Tag + Citation */}
+           <div className="flex items-center gap-3 mb-1">
+               {/* Primary Tag */}
+               <div className="flex items-center gap-2 text-xs font-mono text-slate-400 uppercase tracking-widest">
+                  <span className="w-2 h-2 rounded-full shadow-[0_0_8px]" style={{backgroundColor: primaryTagColor, boxShadow: `0 0 8px ${primaryTagColor}`}}></span>
+                  <span style={{color: primaryTagColor}}>{localNode.tags[0] || 'Uncategorized'}</span>
+               </div>
+
+               {/* Citation Badge */}
+               {localNode.citation && (
+                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider" title="Source Citation">
+                       <Bookmark className="w-3 h-3" />
+                       <span>{localNode.citation}</span>
+                   </div>
+               )}
            </div>
            
            <input 
@@ -202,173 +232,217 @@ export const NotePanel: React.FC<NotePanelProps> = ({ node, allNodes, onClose, o
         </div>
       </div>
 
-      {/* Properties & Tags */}
-      <div className="px-6 py-4 space-y-4 border-b border-white/5 bg-white/5 shrink-0 relative z-50">
-        <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2 text-slate-400 mb-1">
-                <Tag className="w-4 h-4" />
-                <span className="text-sm font-semibold">Tags</span>
-            </div>
-            
-            <div className="flex flex-wrap gap-2 items-center">
-                {localNode.tags.map((tag, index) => {
-                    const tagColor = getTagColor(tag);
-                    const isPrimary = index === 0;
-
-                    return (
-                        <div 
-                            key={`${tag}-${index}`}
-                            draggable={viewMode === 'edit'}
-                            onDragStart={() => handleDragStart(index)}
-                            onDragEnter={() => handleDragEnter(index)}
-                            onDragEnd={handleDragEnd}
-                            onDragOver={(e) => e.preventDefault()}
-                            className={`
-                                group flex items-center gap-2 pl-1 pr-2 py-1 rounded border text-xs transition-all relative overflow-hidden
-                                ${isPrimary ? 'bg-white/5' : 'bg-transparent'}
-                                ${viewMode === 'edit' ? 'cursor-move hover:bg-white/5' : ''}
-                            `}
-                            style={{borderColor: `${tagColor}40`}}
-                        >
-                            {viewMode === 'edit' && <GripVertical className="w-3 h-3 text-white/20 group-hover:text-white/50" />}
-                            
-                            <label 
-                                className="w-3 h-3 rounded-full cursor-pointer hover:scale-110 transition-transform flex-shrink-0 relative" 
-                                style={{backgroundColor: tagColor}}
-                                title="Change tag color"
-                            >
-                                <input 
-                                    type="color" 
-                                    value={tagColor}
-                                    onChange={(e) => onTagColorChange(tag, e.target.value)}
-                                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                                />
-                            </label>
-
-                            <span style={{color: isPrimary ? tagColor : '#cbd5e1'}}>#{tag}</span>
-                            
-                            <button 
-                                onClick={() => {
-                                    const newTags = localNode.tags.filter((_, i) => i !== index);
-                                    setLocalNode({...localNode, tags: newTags});
-                                    onUpdate({...localNode, tags: newTags});
-                                }}
-                                className="ml-1 text-slate-600 hover:text-red-400"
-                            >
-                                <X className="w-3 h-3" />
-                            </button>
-                        </div>
-                    );
-                })}
-                
-                {/* Add Tag UI */}
-                <div className="relative">
-                    {!isAddingTag ? (
-                        <button 
-                            onClick={() => setIsAddingTag(true)}
-                            className="px-2 py-1 flex items-center gap-1 rounded border border-dashed border-white/20 text-xs text-slate-500 hover:text-slate-300 hover:border-white/40 transition-all"
-                        >
-                            <Plus className="w-3 h-3" /> Add
-                        </button>
-                    ) : (
-                        <div className="relative">
-                            <input 
-                                ref={tagInputRef}
-                                type="text"
-                                value={tagInput}
-                                onChange={(e) => setTagInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') addTag(tagInput);
-                                    if (e.key === 'Escape') setIsAddingTag(false);
-                                }}
-                                onBlur={() => {
-                                    // Delay hiding to allow click events on dropdown
-                                    setTimeout(() => setIsAddingTag(false), 200);
-                                }}
-                                className="px-2 py-1 w-32 bg-black/50 border border-cyan-500/50 rounded text-xs text-white outline-none"
-                                placeholder="Type..."
-                            />
-                            
-                            {/* Suggestions Dropdown */}
-                            <div className="absolute top-full left-0 mt-1 w-48 max-h-48 overflow-y-auto bg-[#0a0a0c] border border-white/20 rounded-lg shadow-2xl custom-scrollbar z-50">
-                                {suggestedTags.length > 0 ? (
-                                    suggestedTags.map(tag => (
-                                        <div 
-                                            key={tag}
-                                            onMouseDown={() => addTag(tag)} // MouseDown fires before Blur
-                                            className="px-3 py-2 text-xs text-slate-300 hover:bg-white/10 hover:text-white cursor-pointer flex items-center justify-between"
-                                        >
-                                            <span>#{tag}</span>
-                                            <span 
-                                                className="w-2 h-2 rounded-full" 
-                                                style={{backgroundColor: getTagColor(tag)}}
-                                            />
-                                        </div>
-                                    ))
-                                ) : (
-                                    tagInput && (
-                                        <div 
-                                            onMouseDown={() => addTag(tagInput)}
-                                            className="px-3 py-2 text-xs text-cyan-400 hover:bg-white/10 cursor-pointer"
-                                        >
-                                            Create "#{tagInput}"
-                                        </div>
-                                    )
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className="px-6 py-2 border-b border-white/5 flex justify-end gap-2">
-          <button 
-            onClick={() => setViewMode('edit')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs transition-colors ${viewMode === 'edit' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-          >
-              <PenTool className="w-3 h-3" /> Edit
-          </button>
-          <button 
-            onClick={() => setViewMode('preview')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs transition-colors ${viewMode === 'preview' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-          >
-              <Eye className="w-3 h-3" /> Preview
-          </button>
-      </div>
-
-      {/* Content Editor / Preview */}
+      {/* Main Scrollable Area */}
       <div 
-        className={`flex-1 p-6 overflow-y-auto custom-scrollbar relative transition-colors duration-200 ${isDraggingFile ? 'bg-cyan-900/20' : ''}`}
+        className={`flex-1 overflow-y-auto custom-scrollbar relative flex flex-col transition-colors duration-200 ${isDraggingFile ? 'bg-cyan-900/20' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {isDraggingFile && (
+          {isDraggingFile && (
             <div className="absolute inset-0 flex items-center justify-center z-50 pointer-events-none">
                 <div className="bg-black/80 backdrop-blur rounded-xl p-8 border-2 border-dashed border-cyan-400 text-cyan-400 flex flex-col items-center gap-4">
                     <ImageIcon className="w-12 h-12" />
                     <span className="text-lg font-bold">Drop Image to Embed</span>
                 </div>
             </div>
-        )}
+          )}
 
-        {viewMode === 'edit' ? (
-            <textarea
-                ref={textAreaRef}
-                value={localNode.content}
-                onChange={(e) => setLocalNode(prev => prev ? {...prev, content: e.target.value} : null)}
-                className="w-full h-full bg-transparent text-slate-300 resize-none outline-none font-mono text-sm leading-relaxed placeholder-slate-600"
-                placeholder="Start typing your thoughts..."
-                spellCheck={false}
-            />
-        ) : (
-            <div className="prose prose-invert prose-sm max-w-none">
-                {renderMarkdown(localNode.content)}
+          {/* Properties Section (Scrolls with content) */}
+          <div className="px-6 py-4 space-y-4 border-b border-white/5 bg-white/5 shrink-0">
+            {/* TAGS */}
+            <div className="flex flex-col gap-2">
+                <button 
+                    onClick={() => setIsTagsExpanded(!isTagsExpanded)}
+                    className="flex items-center gap-2 text-slate-400 mb-1 hover:text-white transition-colors w-full"
+                >
+                    {isTagsExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    <div className="flex items-center gap-2">
+                        <Tag className="w-4 h-4" />
+                        <span className="text-sm font-semibold">Tags</span>
+                    </div>
+                </button>
+                
+                <div className={`flex items-center gap-2 transition-all ${isTagsExpanded ? 'flex-wrap' : 'flex-nowrap overflow-hidden'}`}>
+                    {localNode.tags.map((tag, index) => {
+                        const tagColor = getTagColor(tag);
+                        const isPrimary = index === 0;
+
+                        return (
+                            <div 
+                                key={`${tag}-${index}`}
+                                draggable={viewMode === 'edit'}
+                                onDragStart={() => handleDragStart(index)}
+                                onDragEnter={() => handleDragEnter(index)}
+                                onDragEnd={handleDragEnd}
+                                onDragOver={(e) => e.preventDefault()}
+                                className={`
+                                    group flex items-center gap-2 pl-1 pr-2 py-1 rounded border text-xs transition-all relative overflow-hidden shrink-0
+                                    ${isPrimary ? 'bg-white/5' : 'bg-transparent'}
+                                    ${viewMode === 'edit' ? 'cursor-move hover:bg-white/5' : ''}
+                                `}
+                                style={{borderColor: `${tagColor}40`}}
+                            >
+                                {viewMode === 'edit' && <GripVertical className="w-3 h-3 text-white/20 group-hover:text-white/50" />}
+                                
+                                <label 
+                                    className="w-3 h-3 rounded-full cursor-pointer hover:scale-110 transition-transform flex-shrink-0 relative" 
+                                    style={{backgroundColor: tagColor}}
+                                    title="Change tag color"
+                                >
+                                    <input 
+                                        type="color" 
+                                        value={tagColor}
+                                        onChange={(e) => onTagColorChange(tag, e.target.value)}
+                                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                                    />
+                                </label>
+
+                                <span style={{color: isPrimary ? tagColor : '#cbd5e1'}}>#{tag}</span>
+                                
+                                <button 
+                                    onClick={() => {
+                                        const newTags = localNode.tags.filter((_, i) => i !== index);
+                                        setLocalNode({...localNode, tags: newTags});
+                                        onUpdate({...localNode, tags: newTags});
+                                    }}
+                                    className="ml-1 text-slate-600 hover:text-red-400"
+                                >
+                                    <X className="w-3 h-3" />
+                                </button>
+                            </div>
+                        );
+                    })}
+                    
+                    {/* Add Tag UI */}
+                    <div className="relative shrink-0">
+                        {!isAddingTag ? (
+                            <button 
+                                onClick={() => setIsAddingTag(true)}
+                                className="px-2 py-1 flex items-center gap-1 rounded border border-dashed border-white/20 text-xs text-slate-500 hover:text-slate-300 hover:border-white/40 transition-all"
+                            >
+                                <Plus className="w-3 h-3" /> Add
+                            </button>
+                        ) : (
+                            <div className="relative">
+                                <input 
+                                    ref={tagInputRef}
+                                    type="text"
+                                    value={tagInput}
+                                    onChange={(e) => setTagInput(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') addTag(tagInput);
+                                        if (e.key === 'Escape') setIsAddingTag(false);
+                                    }}
+                                    onBlur={() => {
+                                        // Delay hiding to allow click events on dropdown
+                                        setTimeout(() => setIsAddingTag(false), 200);
+                                    }}
+                                    className="px-2 py-1 w-32 bg-black/50 border border-cyan-500/50 rounded text-xs text-white outline-none"
+                                    placeholder="Type..."
+                                />
+                                
+                                {/* Suggestions Dropdown */}
+                                <div className="absolute top-full left-0 mt-1 w-48 max-h-48 overflow-y-auto bg-[#0a0a0c] border border-white/20 rounded-lg shadow-2xl custom-scrollbar z-50">
+                                    {suggestedTags.length > 0 ? (
+                                        suggestedTags.map(tag => (
+                                            <div 
+                                                key={tag}
+                                                onMouseDown={() => addTag(tag)} // MouseDown fires before Blur
+                                                className="px-3 py-2 text-xs text-slate-300 hover:bg-white/10 hover:text-white cursor-pointer flex items-center justify-between"
+                                            >
+                                                <span>#{tag}</span>
+                                                <span 
+                                                    className="w-2 h-2 rounded-full" 
+                                                    style={{backgroundColor: getTagColor(tag)}}
+                                                />
+                                            </div>
+                                        ))
+                                    ) : (
+                                        tagInput && (
+                                            <div 
+                                                onMouseDown={() => addTag(tagInput)}
+                                                className="px-3 py-2 text-xs text-cyan-400 hover:bg-white/10 cursor-pointer"
+                                            >
+                                                Create "#{tagInput}"
+                                            </div>
+                                        )
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
-        )}
+            
+            {/* CONNECTIONS LIST */}
+            <div className="flex flex-col gap-2 pt-2 border-t border-white/5">
+                <button 
+                    onClick={() => setIsNetworkExpanded(!isNetworkExpanded)}
+                    className="flex items-center gap-2 text-slate-400 mb-1 hover:text-white transition-colors w-full"
+                >
+                    {isNetworkExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    <div className="flex items-center gap-2">
+                        <Network className="w-4 h-4" />
+                        <span className="text-sm font-semibold">Network</span>
+                    </div>
+                </button>
+                
+                <div className={`flex gap-2 transition-all ${isNetworkExpanded ? 'flex-wrap' : 'flex-nowrap overflow-hidden'}`}>
+                    {connectedNodes.length > 0 ? (
+                        connectedNodes.map(connectedNode => (
+                             <div key={connectedNode.id} className="group flex items-center gap-2 pl-2 pr-1 py-1 bg-white/5 hover:bg-white/10 border border-white/5 rounded-md text-xs transition-colors shrink-0">
+                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: getTagColor(connectedNode.tags[0] || 'default') }}></span>
+                                 <span className="text-slate-300 max-w-[120px] truncate" title={connectedNode.title}>{connectedNode.title}</span>
+                                 <button 
+                                    onClick={() => handleUnlink(connectedNode.id)}
+                                    className="p-1 text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                    title="Unlink"
+                                 >
+                                     <Unplug className="w-3 h-3" />
+                                 </button>
+                             </div>
+                        ))
+                    ) : (
+                        <div className="text-xs text-slate-600 italic pl-1">No active connections.</div>
+                    )}
+                </div>
+            </div>
+          </div>
+
+          {/* Toolbar (Scrolls with content, but sticky) */}
+          <div className="px-6 py-2 border-b border-white/5 flex justify-end gap-2 shrink-0 bg-[#0a0a0c]/50 backdrop-blur-sm sticky top-0 z-10">
+              <button 
+                onClick={() => setViewMode('edit')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs transition-colors ${viewMode === 'edit' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                  <PenTool className="w-3 h-3" /> Edit
+              </button>
+              <button 
+                onClick={() => setViewMode('preview')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs transition-colors ${viewMode === 'preview' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                  <Eye className="w-3 h-3" /> Preview
+              </button>
+          </div>
+
+          {/* Content Editor */}
+          <div className="flex-1 p-6 min-h-[500px]">
+              {viewMode === 'edit' ? (
+                  <textarea
+                      ref={textAreaRef}
+                      value={localNode.content}
+                      onChange={(e) => setLocalNode(prev => prev ? {...prev, content: e.target.value} : null)}
+                      className="w-full h-full bg-transparent text-slate-300 resize-none outline-none font-mono text-sm leading-relaxed placeholder-slate-600 min-h-[400px]"
+                      placeholder="Start typing your thoughts..."
+                      spellCheck={false}
+                  />
+              ) : (
+                  <div className="prose prose-invert prose-sm max-w-none">
+                      {renderMarkdown(localNode.content)}
+                  </div>
+              )}
+          </div>
       </div>
     </div>
   );
