@@ -2,8 +2,6 @@
 
 **Encephra:** The 3D Cognitive Space Connecting Human Thought and AI Reasoning
 
-![Encephra Preview](https://via.placeholder.com/800x400?text=Encephra+3D+Interface)
-
 ## 🧠 Core Philosophy
 Encephra is **Local-First software**.
 *   **Privacy:** All graph data is stored in your browser's `localStorage`. No data is sent to a cloud database.
