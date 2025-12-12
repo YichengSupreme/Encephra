@@ -44,7 +44,7 @@ Encephra is **Local-First software**.
     ```
 3.  Start the development server:
     ```bash
-    npm start
+    npm run dev
     ```
 
 ### Usage
